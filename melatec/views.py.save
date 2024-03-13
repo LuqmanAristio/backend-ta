@@ -6,12 +6,7 @@ from pytube import YouTube
 from moviepy.editor import VideoFileClip
 from django.http import HttpResponse, FileResponse
 from y2mate_api import Handler
-from google.cloud import storage
-from google.oauth2 import service_account
 
-import datetime
-import random
-import string
 import pickle
 import soundfile as sf
 import warnings
@@ -104,54 +99,28 @@ def calculate_mfcc(y, sr):
 @require_POST
 def youtube_to_melody(request):
     try:
-        if 'youtube_url' in request.POST:
-            youtube_url = request.POST.get('youtube_url')
-            temp_audio_filename = []
+       youtube_url = request.POST.get('youtube_url')
+        temp_audio_filename = []
 
-            api = Handler(youtube_url)
-            for audio_metadata in api.run(format="mp3"):
-                title = audio_metadata['title']
-                temp_audio_filename.append(title)
+        api = Handler(youtube_url)
+        for audio_metadata in api.run(format="mp3"):
+            title = audio_metadata['title']
+            temp_audio_filename.append(title)
         
-            api.auto_save(format="mp3")
-            folder_path = "/home/aristio170802/backendta/"
+        api.auto_save(format="mp3")
+        folder_path = "/home/aristio170802/backendta/"
 
-            mp3_files = glob.glob(f"{folder_path}/*.mp3")
+        mp3_files = glob.glob(f"{folder_path}/*.mp3")
 
-            if mp3_files:
-                audio_file = mp3_files[0]
-                print(f"File MP3 ditemukan: {audio_file}")
-            else:
-                print("Tidak ada file MP3 yang ditemukan dalam folder.")
-
-            print(" ==> Download audio completed, starting melody extraction")
-
-        elif 'audio_file' in request.FILES:
-            uploaded_file = request.FILES['audio_file']
-            temp_audio_filename = uploaded_file.name
-
-            audio_file_path = os.path.join("/home/aristio170802/backendta", temp_audio_filename)
-            with open(audio_file_path, 'wb') as audio_file:
-                for chunk in uploaded_file.chunks():
-                    audio_file.write(chunk)
-            
-            audio_file = audio_file_path
-            print(audio_file)
-            print(" ==> Starting melody extraction for uploaded audio file")
-        
+        if mp3_files:
+            audio_file = mp3_files[0]
+            print(f"File MP3 ditemukan: {audio_file}")
         else:
-            return JsonResponse({'error': 'Invalid request. Please provide a YouTube URL or an audio file.'})
-        
-        _, file_extension = os.path.splitext(audio_file)
-        file_extension = file_extension.lower() 
+            print("Tidak ada file MP3 yang ditemukan dalam folder.")
 
-        if file_extension == '.wav':
-            audio = AudioSegment.from_file(audio_file, format="wav")
-        elif file_extension == '.mp3':
-            audio = AudioSegment.from_file(audio_file, format="mp3")
-        else:
-            raise ValueError("Unsupported audio file format")
+        print(" ==> Download audio completed, starting melody extraction"
 
+        audio = AudioSegment.from_file(audio_file, format="mp3")
         audio = audio.set_channels(1).set_frame_rate(44100)
         sample_rate = audio.frame_rate
         audio_array = np.array(audio.get_array_of_samples(), dtype=np.float32)
@@ -187,11 +156,15 @@ def youtube_to_melody(request):
         wav_file_path = "/home/aristio170802/backendta/temp_mel_melosynth.wav"
 
         if os.path.exists(wav_file_path):
-            audio_url = save_wav_to_gcs(wav_file_path)
-            os.remove(wav_file_path)
-            os.remove(csv_file_path)
-            os.remove(audio_file)
-            return JsonResponse({'audio_url': audio_url})
+            with open(wav_file_path, 'rb') as wav_file:
+
+                mime_type, _ = mimetypes.guess_type(wav_file_path)
+                response = HttpResponse(wav_file.read(), content_type=mime_type)
+                response['Content-Disposition'] = f'attachment; filename="{temp_audio_filename}.wav"'
+                os.remove(wav_file_path)
+                os.remove(csv_file_path)
+                os.remove(audio_file)
+                return response
         else:
             return JsonResponse({'error': 'WAV file not found'})
 
@@ -200,26 +173,3 @@ def youtube_to_melody(request):
 
     except Exception as e:
         return JsonResponse({'error': str(e)})
-
-def save_wav_to_gcs(wav_file_path):
-    credentials_path = '/home/aristio170802/rising-goal-415711-8b5b9061a160.json'
-    bucket_name = 'melatec'
-    audio_blob_name = generate_unique_blob_name('melody.wav')
-
-    credentials = service_account.Credentials.from_service_account_file(credentials_path)
-    storage_client = storage.Client(credentials=credentials)
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(audio_blob_name)
-
-    blob.upload_from_filename(wav_file_path, predefined_acl='publicRead')
-
-    audio_url = blob.public_url
-
-    return audio_url
-
-def generate_unique_blob_name(original_name):
-    # Membuat nama unik dengan menambahkan tanda waktu dan nomor acak
-    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    random_chars = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    unique_name = f"{original_name}_{timestamp}_{random_chars}"
-    return unique_name
